@@ -12,6 +12,7 @@ import LiveMetrics from './components/LiveMetrics.tsx';
 import PaceController from './components/PaceController.tsx';
 import SuggestionDisplay from './components/SuggestionDisplay.tsx';
 import SuggestionToggle from './components/SuggestionToggle.tsx';
+import { supabase } from './services/supabaseClient.ts';
 
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('en');
@@ -19,7 +20,7 @@ const App: React.FC = () => {
   const [activeScreen, setActiveScreen] = useState<'loading' | 'home' | 'customize' | 'practice' | 'results' | 'stats' | 'profile'>('loading');
   const [selectedScenario, setSelectedScenario] = useState<Scenario | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
   // User State (simplified for local development)
   const [user, setUser] = useState<any>(null);
 
@@ -45,18 +46,19 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<SessionResult[]>([]);
   const [lastTranscription, setLastTranscription] = useState('');
   const [showWorkshop, setShowWorkshop] = useState(false);
-  
+  const [selectedSessionHistory, setSelectedSessionHistory] = useState<SessionResult | null>(null);
+
   // Real-time metrics
   const [liveEnergy, setLiveEnergy] = useState(0);
   const [livePace, setLivePace] = useState(0);
-  
+
   // Pace control state
   const [currentPace, setCurrentPace] = useState<PaceSpeed>('normal');
-  
+
   // Coaching state
   const [currentSuggestion, setCurrentSuggestion] = useState<CoachingSuggestion | null>(null);
   const [suggestionsEnabled, setSuggestionsEnabled] = useState(true);
-  
+
   const coachRef = useRef<CommunicationCoach>(new CommunicationCoach());
   const startTimeRef = useRef<number | null>(null);
   const coachingEngineRef = useRef<CoachingEngineService>(CoachingEngineService.getInstance());
@@ -67,7 +69,7 @@ const App: React.FC = () => {
     setIsRTL(lang.startsWith('ar'));
     document.documentElement.dir = lang.startsWith('ar') ? 'rtl' : 'ltr';
     document.documentElement.lang = lang === 'en' ? 'en' : 'ar';
-    
+
     // Update coaching engine language
     coachingEngineRef.current.setLanguage(lang);
   }, [lang]);
@@ -77,51 +79,93 @@ const App: React.FC = () => {
     // Load saved pace setting
     const savedPace = paceServiceRef.current.getCurrentPace();
     setCurrentPace(savedPace);
-    
+
     // Set up suggestion queue callbacks
     suggestionQueueRef.current.setDisplayCallbacks({
       onShow: (suggestion) => setCurrentSuggestion(suggestion),
       onHide: () => setCurrentSuggestion(null)
     });
-    
+
     // Initialize coaching engine settings
     coachingEngineRef.current.setSuggestionsEnabled(suggestionsEnabled);
   }, [suggestionsEnabled]);
 
-  // Skip authentication for local development
+  // Supabase Auth and User Profile Integration
   useEffect(() => {
-    // Create a mock user for local development
-    const mockUser = {
-      id: 'local-user',
-      email: 'local@vocaledge.app',
-      user_metadata: { name: 'Local User' }
-    };
-    setUser(mockUser as any);
-    setActiveScreen('home');
-  }, []);
-
-  // Fetch data from Supabase when user is logged in
-  useEffect(() => {
-    if (user) {
-      fetchUserData();
-    }
-  }, [user]);
-
-  // Mock data fetching for local development
-  const fetchUserData = async () => {
-    if (!user) return;
-    
-    // Set mock profile data
-    setProfile({
-      name: 'Local User',
-      bio: 'Communication enthusiast',
-      goal: 'Improve public speaking skills',
-      preferredTone: 'supportive',
-      joinedDate: new Date().toLocaleDateString()
+    // 1. Check current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchUserData(session.user.id);
+      } else {
+        setActiveScreen('loading');
+      }
     });
 
-    // Set empty history for fresh start
-    setHistory([]);
+    // 2. Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const newUser = session?.user ?? null;
+      setUser(newUser);
+      if (newUser) {
+        fetchUserData(newUser.id);
+      } else {
+        setActiveScreen('home');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Fetch data from Supabase
+  const fetchUserData = async (userId: string) => {
+    try {
+      // Fetch Profile
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Error fetching profile:', profileError);
+      } else if (profileData) {
+        setProfile({
+          name: profileData.name || '',
+          bio: profileData.bio || '',
+          goal: profileData.goal || '',
+          preferredTone: (profileData.preferred_tone as any) || 'supportive',
+          joinedDate: new Date(profileData.created_at).toLocaleDateString()
+        });
+      }
+
+      // Fetch History
+      const { data: historyData, error: historyError } = await supabase
+        .from('sessions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (historyError) {
+        console.error('Error fetching history:', historyError);
+      } else if (historyData) {
+        const formattedHistory: SessionResult[] = historyData.map((s: any) => ({
+          id: s.id,
+          date: new Date(s.created_at).toLocaleDateString(),
+          scenarioType: s.scenario_type,
+          confidenceScore: s.confidence_score,
+          effectivenessScore: s.effectiveness_score,
+          feedback: s.feedback,
+          duration: s.duration,
+          personaName: s.persona_name,
+          recordingTurns: s.recording_turns
+        }));
+        setHistory(formattedHistory);
+      }
+
+      setActiveScreen('home');
+    } catch (err) {
+      console.error('Unexpected error in fetchUserData:', err);
+    }
   };
 
 
@@ -129,31 +173,42 @@ const App: React.FC = () => {
   const wipeHistory = async () => {
     if (!user) return;
     if (!confirm("Are you sure you want to wipe all session history? This cannot be undone.")) return;
-    
-    // For local development, just clear the local history
-    setHistory([]);
-    setErrorMsg("History cleared.");
-    setTimeout(() => setErrorMsg(null), 2000);
+
+    try {
+      const { error } = await supabase
+        .from('sessions')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      setHistory([]);
+      setErrorMsg("History cleared.");
+      setTimeout(() => setErrorMsg(null), 2000);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to clear history.");
+    }
   };
 
   const handleSignOut = async () => {
-    // Reset app to initial state
+    await supabase.auth.signOut();
     setHistory([]);
     setProfile({
-      name: 'Local User',
-      bio: 'Communication enthusiast',
-      goal: 'Improve public speaking skills',
+      name: '',
+      bio: '',
+      goal: '',
       preferredTone: 'supportive',
-      joinedDate: new Date().toLocaleDateString()
+      joinedDate: ''
     });
-    setActiveScreen('home');
+    setUser(null);
+    setActiveScreen('loading');
   };
 
   const handleStartSession = async () => {
     if (!selectedScenario || !selectedPersona) return;
     setErrorMsg(null);
     setLastTranscription('');
-    
+
     const config: SessionConfig = {
       scenario: selectedScenario,
       persona: selectedPersona,
@@ -174,9 +229,9 @@ const App: React.FC = () => {
       await coachRef.current.startSession(config, lang, {
         onTranscriptionUpdate: (text) => setLastTranscription(text),
         onClose: () => setIsSessionActive(false),
-        onerror: (e: any) => { 
-          setErrorMsg(e?.message || "Connection failed."); 
-          setIsSessionActive(false); 
+        onerror: (e: any) => {
+          setErrorMsg(e?.message || "Connection failed.");
+          setIsSessionActive(false);
           setActiveScreen('customize');
         }
       });
@@ -219,35 +274,55 @@ const App: React.FC = () => {
     const duration = startTimeRef.current ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0;
     setIsSessionActive(false);
     setIsAnalyzing(true);
-    
+
     const { history: text, recordedTurns } = coachRef.current.stopSession();
     try {
       if (!text.trim()) { setActiveScreen('home'); return; }
       const res = await coachRef.current.getDetailedAnalysis(text, { scenario: selectedScenario!, persona: selectedPersona!, topic, outcome, focusSkills: selectedSkills }, lang);
-      
-      setAnalysisResult({ ...res, duration, recordingTurns: recordedTurns }); 
-      
+
+      setAnalysisResult({ ...res, duration, recordingTurns: recordedTurns });
+
       if (res.troubleWords && res.troubleWords.length > 0) {
         setLastTroubleWords(res.troubleWords);
       } else {
         setLastTroubleWords([]);
       }
 
-      // Store session in local history (no database for local development)
-      const newSession = {
-        id: `local-${Date.now()}`,
-        date: new Date().toLocaleDateString(),
-        scenarioType: selectedScenario!.type,
-        confidenceScore: res.confidenceScore,
-        effectivenessScore: res.effectivenessScore,
-        feedback: res.feedback,
-        duration: duration,
-        personaName: selectedPersona!.name[lang],
-        recordingTurns: recordedTurns
-      };
+      // Store session in Supabase
+      if (user) {
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('sessions')
+          .insert({
+            user_id: user.id,
+            scenario_type: selectedScenario!.type,
+            confidence_score: res.confidenceScore,
+            effectiveness_score: res.effectivenessScore,
+            feedback: res.feedback,
+            duration: duration,
+            persona_name: selectedPersona!.name[lang],
+            recording_turns: recordedTurns
+          })
+          .select()
+          .single();
 
-      setHistory(prev => [newSession, ...prev]);
-      
+        if (sessionError) {
+          console.error('Error saving session:', sessionError);
+        } else if (sessionData) {
+          const newSession: SessionResult = {
+            id: sessionData.id,
+            date: new Date(sessionData.created_at).toLocaleDateString(),
+            scenarioType: sessionData.scenario_type,
+            confidenceScore: sessionData.confidence_score,
+            effectivenessScore: sessionData.effectiveness_score,
+            feedback: sessionData.feedback,
+            duration: sessionData.duration,
+            personaName: sessionData.persona_name,
+            recordingTurns: sessionData.recording_turns
+          };
+          setHistory(prev => [newSession, ...prev]);
+        }
+      }
+
       setActiveScreen('results');
     } catch (e) {
       setErrorMsg("Analysis failed.");
@@ -260,9 +335,24 @@ const App: React.FC = () => {
 
   const saveProfile = async () => {
     if (!user) return;
-    // For local development, just show success message
-    setErrorMsg("Profile saved locally!");
-    setTimeout(() => setErrorMsg(null), 2000);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          name: profile.name,
+          bio: profile.bio,
+          goal: profile.goal,
+          preferred_tone: profile.preferredTone
+        })
+        .eq('id', user.id);
+
+      if (error) throw error;
+
+      setErrorMsg("Profile saved successfully!");
+      setTimeout(() => setErrorMsg(null), 2000);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to save profile.");
+    }
   };
 
   const t = (key: keyof typeof TRANSLATIONS) => TRANSLATIONS[key][lang];
@@ -287,10 +377,30 @@ const App: React.FC = () => {
 
   if (activeScreen === 'loading') {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-slate-950 text-white">
-        <div className="w-16 h-16 rounded-[2rem] bg-blue-600 flex items-center justify-center animate-pulse">
-           <i className="fas fa-bullseye text-2xl"></i>
+      <div className="flex flex-col items-center justify-center h-full bg-slate-950 text-white space-y-8 animate-fadeIn">
+        <div className="w-16 h-16 rounded-[2rem] bg-blue-600 flex items-center justify-center animate-pulse shadow-[0_0_50px_-12px_rgba(37,99,235,0.5)]">
+          <i className="fas fa-bullseye text-2xl"></i>
         </div>
+        {!user && (
+          <div className="flex flex-col items-center gap-6 animate-slideUp">
+            <div className="text-center">
+              <h2 className="text-2xl font-black tracking-tighter uppercase italic">VocalEdge</h2>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.3em]">Master Your Voice</p>
+            </div>
+
+            <button
+              onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
+              className="group relative px-8 py-4 bg-white text-slate-950 font-black rounded-2xl shadow-2xl active:scale-95 transition-all flex items-center gap-3 overflow-hidden"
+            >
+              <div className="absolute inset-0 bg-blue-500/10 translate-y-full group-hover:translate-y-0 transition-transform"></div>
+              <i className="fab fa-google text-blue-600"></i>
+              <span className="relative">SIGN IN WITH GOOGLE</span>
+            </button>
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center max-w-[220px] leading-relaxed opacity-50">
+              Your voice metrics are private and protected by Supabase
+            </p>
+          </div>
+        )}
       </div>
     );
   }
@@ -299,8 +409,8 @@ const App: React.FC = () => {
     <div className={`flex flex-col h-full bg-slate-950 text-slate-100 ${isRTL ? 'font-arabic' : 'font-english'}`}>
       {errorMsg && (
         <div className="fixed top-20 left-6 right-6 z-[60] p-4 bg-blue-600/90 backdrop-blur rounded-2xl shadow-2xl animate-slideDown flex items-center justify-between">
-           <p className="text-xs font-bold text-white uppercase tracking-tight">{errorMsg}</p>
-           <button onClick={() => setErrorMsg(null)} className="text-white/50"><i className="fas fa-times"></i></button>
+          <p className="text-xs font-bold text-white uppercase tracking-tight">{errorMsg}</p>
+          <button onClick={() => setErrorMsg(null)} className="text-white/50"><i className="fas fa-times"></i></button>
         </div>
       )}
 
@@ -342,20 +452,20 @@ const App: React.FC = () => {
             <div className="space-y-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userName')}</label>
-                <input value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500" />
+                <input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500" />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userGoal')}</label>
-                <textarea value={profile.goal} onChange={e => setProfile({...profile, goal: e.target.value})} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 h-24" />
+                <textarea value={profile.goal} onChange={e => setProfile({ ...profile, goal: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 h-24" />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('toneVibe')}</label>
-                <select value={profile.preferredTone} onChange={e => setProfile({...profile, preferredTone: e.target.value as any})} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500">
+                <select value={profile.preferredTone} onChange={e => setProfile({ ...profile, preferredTone: e.target.value as any })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500">
                   <option value="supportive">Supportive Coach</option>
                   <option value="brutal">Brutal Honesty</option>
                 </select>
               </div>
-              <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95">SAVE LOCALLY</button>
+              <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95 hover:bg-blue-500 hover:shadow-blue-500/20">{t('saveProfile')}</button>
               <div className="pt-6 space-y-4">
                 <button onClick={wipeHistory} className="w-full p-5 rounded-2xl bg-red-900/10 border border-red-500/10 flex items-center justify-between group active:bg-red-900/20">
                   <div className="flex items-center gap-4">
@@ -398,7 +508,7 @@ const App: React.FC = () => {
           <div className="h-full flex flex-col items-center justify-center space-y-8 animate-fadeIn py-10">
             {/* Pace Control and Coaching Toggle */}
             <div className="w-full flex justify-between items-center px-4">
-              <PaceController 
+              <PaceController
                 currentPace={currentPace}
                 onPaceChange={handlePaceChange}
                 disabled={!isSessionActive}
@@ -416,18 +526,18 @@ const App: React.FC = () => {
               <div className="w-40 h-40 rounded-[3rem] bg-slate-900 border-2 border-blue-500 flex items-center justify-center text-5xl text-blue-500"><i className={`fas ${selectedPersona?.icon}`}></i></div>
               <h3 className="text-2xl font-black">{selectedPersona?.name[lang]}</h3>
             </div>
-            
+
             <div className="w-full min-h-[160px] bg-slate-900/50 rounded-[2.5rem] border border-slate-800/50 p-6 flex flex-col justify-center relative">
-               <VoiceVisualizer color="bg-blue-500" />
-               <p className="mt-4 text-center text-sm italic text-slate-400 animate-pulse">{lastTranscription || "Listening..."}</p>
-               <LiveMetrics 
-                 energy={liveEnergy} 
-                 pace={livePace} 
-                 lang={lang} 
-                 onCoachingAnalysis={handleCoachingAnalysis}
-               />
+              <VoiceVisualizer color="bg-blue-500" />
+              <p className="mt-4 text-center text-sm italic text-slate-400 animate-pulse">{lastTranscription || "Listening..."}</p>
+              <LiveMetrics
+                energy={liveEnergy}
+                pace={livePace}
+                lang={lang}
+                onCoachingAnalysis={handleCoachingAnalysis}
+              />
             </div>
-            
+
             <button onClick={handleEndSession} className="w-full max-w-xs py-5 rounded-[2rem] font-black bg-red-600 shadow-xl transition-all active:scale-95">FINISH</button>
           </div>
         )}
@@ -440,7 +550,7 @@ const App: React.FC = () => {
               <div className="bg-slate-900 p-6 rounded-[2rem] text-center"><p className="text-3xl font-black">{analysisResult.effectivenessScore}%</p><p className="text-[10px] text-slate-500 uppercase tracking-widest">Effectiveness</p></div>
             </div>
             <div className="bg-slate-900 p-6 rounded-[2.5rem] border border-slate-800"><p className="text-slate-300 italic">"{analysisResult.feedback}"</p></div>
-            
+
             {analysisResult.troubleWords && analysisResult.troubleWords.length > 0 && (
               <button onClick={() => setShowWorkshop(true)} className="w-full py-4 bg-blue-600/20 border border-blue-500/30 rounded-2xl text-blue-400 font-bold flex items-center justify-center gap-3">
                 <i className="fas fa-microphone-alt"></i> OPEN PRONUNCIATION WORKSHOP
@@ -456,19 +566,103 @@ const App: React.FC = () => {
             <h2 className="text-3xl font-black">{t('stats')}</h2>
             <div className="grid grid-cols-2 gap-4">
               <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black">{history.length}</h4><p className="text-[10px] text-slate-500 uppercase">Sessions</p></div>
-              <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black text-blue-500">{history.length > 0 ? Math.round(history.reduce((a,c)=>a+c.confidenceScore,0)/history.length) : 0}%</h4><p className="text-[10px] text-slate-500 uppercase tracking-widest">Avg Conf</p></div>
+              <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black text-blue-500">{history.length > 0 ? Math.round(history.reduce((a, c) => a + c.confidenceScore, 0) / history.length) : 0}%</h4><p className="text-[10px] text-slate-500 uppercase tracking-widest">Avg Conf</p></div>
             </div>
             <div className="space-y-4">
-               {history.map(item => (
-                 <div key={item.id} className="p-4 bg-slate-900/40 border border-slate-900 rounded-2xl flex items-center justify-between">
-                    <div><p className="font-bold text-sm">{item.personaName}</p><p className="text-[10px] text-slate-500">{item.date}</p></div>
+              {history.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => setSelectedSessionHistory(item)}
+                  className="w-full text-left p-4 bg-slate-900/40 border border-slate-900 rounded-2xl flex items-center justify-between group active:scale-[0.98] transition-all hover:bg-slate-900/60"
+                >
+                  <div>
+                    <p className="font-bold text-sm group-hover:text-blue-400 transition-colors">{item.personaName}</p>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest">{item.date} • {Math.floor(item.duration / 60)}m {item.duration % 60}s</p>
+                  </div>
+                  <div className="flex items-center gap-3">
                     <p className="text-blue-500 font-black">{item.confidenceScore}%</p>
-                 </div>
-               ))}
+                    <i className="fas fa-chevron-right text-slate-800 text-xs group-hover:text-blue-500/50 transition-colors"></i>
+                  </div>
+                </button>
+              ))}
+              {history.length === 0 && (
+                <div className="text-center py-12 opacity-30">
+                  <i className="fas fa-history text-4xl mb-4"></i>
+                  <p className="text-xs uppercase tracking-[0.2em]">{t('noHistory')}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
       </main>
+
+      {/* Session Detail Modal */}
+      {selectedSessionHistory && (
+        <div className="fixed inset-0 z-[100] bg-slate-950 flex flex-col animate-slideUp">
+          <header className="px-6 py-6 flex justify-between items-center border-b border-white/5 sticky top-0 bg-slate-950/80 backdrop-blur-xl">
+            <div>
+              <h3 className="text-xl font-black uppercase tracking-tighter italic">{t('missionDebrief')}</h3>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{selectedSessionHistory.personaName} • {selectedSessionHistory.date}</p>
+            </div>
+            <button
+              onClick={() => setSelectedSessionHistory(null)}
+              className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-slate-400 active:scale-90 transition-all"
+            >
+              <i className="fas fa-times"></i>
+            </button>
+          </header>
+
+          <div className="flex-1 overflow-y-auto px-6 py-8 space-y-8 pb-32">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-900/50 p-6 rounded-[2.5rem] border border-white/5 text-center">
+                <p className="text-4xl font-black text-blue-500 mb-1">{selectedSessionHistory.confidenceScore}%</p>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{t('confidence')}</p>
+              </div>
+              <div className="bg-slate-900/50 p-6 rounded-[2.5rem] border border-white/5 text-center">
+                <p className="text-4xl font-black text-white mb-1">{selectedSessionHistory.effectivenessScore}%</p>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{t('effectiveness')}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em]">{t('theAnalysis')}</label>
+              <div className="bg-blue-600/5 border border-blue-500/10 p-6 rounded-[2.5rem]">
+                <p className="text-slate-300 italic leading-relaxed">"{selectedSessionHistory.feedback}"</p>
+              </div>
+            </div>
+
+            {selectedSessionHistory.recordingTurns && selectedSessionHistory.recordingTurns.length > 0 && (
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em]">{t('recordingTurns')}</label>
+                <div className="space-y-6">
+                  {selectedSessionHistory.recordingTurns.map((turn, idx) => (
+                    <div key={idx} className={`flex flex-col ${turn.role === 'user' ? 'items-end' : 'items-start'}`}>
+                      <span className="text-[8px] font-black text-slate-700 uppercase tracking-widest mb-2 px-2">
+                        {turn.role === 'user' ? t('rolePilot') : t('roleCoach')}
+                      </span>
+                      <div className={`max-w-[85%] p-4 rounded-3xl text-sm font-medium leading-relaxed ${turn.role === 'user'
+                          ? 'bg-blue-600 text-white rounded-tr-none'
+                          : 'bg-slate-900 text-slate-300 rounded-tl-none border border-white/5'
+                        }`}>
+                        {turn.text}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="fixed bottom-0 left-0 right-0 p-6 bg-slate-950/80 backdrop-blur-xl border-t border-white/5">
+            <button
+              onClick={() => setSelectedSessionHistory(null)}
+              className="w-full py-5 bg-white text-slate-950 font-black rounded-3xl shadow-2xl active:scale-95 transition-all"
+            >
+              {t('closeDebrief').toUpperCase()}
+            </button>
+          </div>
+        </div>
+      )}
 
       {['home', 'stats', 'profile'].includes(activeScreen) && (
         <nav className="fixed bottom-0 left-0 right-0 bg-slate-950/80 backdrop-blur-2xl border-t border-slate-900 px-8 py-4 flex justify-between items-center z-50">
@@ -482,7 +676,7 @@ const App: React.FC = () => {
       )}
 
       {/* Coaching Suggestion Display */}
-      <SuggestionDisplay 
+      <SuggestionDisplay
         suggestion={currentSuggestion}
         onDismiss={handleSuggestionDismiss}
         onExpand={handleSuggestionExpand}
@@ -490,11 +684,11 @@ const App: React.FC = () => {
       />
 
       {showWorkshop && (
-        <PronunciationWorkshop 
-          items={lastTroubleWords.length > 0 ? lastTroubleWords : []} 
-          lang={lang} 
-          coach={coachRef.current} 
-          onClose={() => setShowWorkshop(false)} 
+        <PronunciationWorkshop
+          items={lastTroubleWords.length > 0 ? lastTroubleWords : []}
+          lang={lang}
+          coach={coachRef.current}
+          onClose={() => setShowWorkshop(false)}
         />
       )}
     </div>
