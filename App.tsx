@@ -1,26 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Language, ScenarioType, SessionResult, Scenario, Persona, SessionConfig, RecordingTurn, UserProfile, PronunciationItem } from './types.ts';
+import { Language, ScenarioType, SessionResult, Scenario, Persona, SessionConfig, RecordingTurn, UserProfile, PronunciationItem, PaceSpeed, CoachingSuggestion, EnhancedRealtimeMetrics } from './types.ts';
 import { SCENARIOS, TRANSLATIONS, FOCUS_SKILLS } from './constants.ts';
 import { CommunicationCoach } from './services/geminiService.ts';
-import { supabase } from './services/supabaseClient.ts';
+import { CoachingEngineService } from './services/coachingEngine.ts';
+import { SuggestionQueue } from './services/suggestionQueue.ts';
+import { PaceService } from './services/paceService.ts';
 import LanguageSwitcher from './components/LanguageSwitcher.tsx';
 import VoiceVisualizer from './components/VoiceVisualizer.tsx';
 import PronunciationWorkshop from './components/PronunciationWorkshop.tsx';
 import LiveMetrics from './components/LiveMetrics.tsx';
+import PaceController from './components/PaceController.tsx';
+import SuggestionDisplay from './components/SuggestionDisplay.tsx';
+import SuggestionToggle from './components/SuggestionToggle.tsx';
 
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('en');
   const [isRTL, setIsRTL] = useState(false);
-  const [activeScreen, setActiveScreen] = useState<'loading' | 'landing' | 'identity' | 'auth' | 'home' | 'customize' | 'practice' | 'results' | 'stats' | 'profile'>('loading');
+  const [activeScreen, setActiveScreen] = useState<'loading' | 'home' | 'customize' | 'practice' | 'results' | 'stats' | 'profile'>('loading');
   const [selectedScenario, setSelectedScenario] = useState<Scenario | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // Supabase Auth State
+  // User State (simplified for local development)
   const [user, setUser] = useState<any>(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   // Customization State
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null);
@@ -49,40 +50,54 @@ const App: React.FC = () => {
   const [liveEnergy, setLiveEnergy] = useState(0);
   const [livePace, setLivePace] = useState(0);
   
+  // Pace control state
+  const [currentPace, setCurrentPace] = useState<PaceSpeed>('normal');
+  
+  // Coaching state
+  const [currentSuggestion, setCurrentSuggestion] = useState<CoachingSuggestion | null>(null);
+  const [suggestionsEnabled, setSuggestionsEnabled] = useState(true);
+  
   const coachRef = useRef<CommunicationCoach>(new CommunicationCoach());
   const startTimeRef = useRef<number | null>(null);
+  const coachingEngineRef = useRef<CoachingEngineService>(CoachingEngineService.getInstance());
+  const paceServiceRef = useRef<PaceService>(PaceService.getInstance());
+  const suggestionQueueRef = useRef<SuggestionQueue>(SuggestionQueue.getInstance());
 
   useEffect(() => {
     setIsRTL(lang.startsWith('ar'));
     document.documentElement.dir = lang.startsWith('ar') ? 'rtl' : 'ltr';
     document.documentElement.lang = lang === 'en' ? 'en' : 'ar';
+    
+    // Update coaching engine language
+    coachingEngineRef.current.setLanguage(lang);
   }, [lang]);
 
-  // Handle Supabase Auth Session and App Bootstrapping
+  // Initialize pace control and coaching
   useEffect(() => {
-    const bootstrap = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
-      
-      if (!session) {
-        setActiveScreen('landing');
-      } else {
-        await checkGeminiKey();
-      }
-    };
-
-    bootstrap();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session) {
-        checkGeminiKey();
-      } else {
-        setActiveScreen('landing');
-      }
+    // Load saved pace setting
+    const savedPace = paceServiceRef.current.getCurrentPace();
+    setCurrentPace(savedPace);
+    
+    // Set up suggestion queue callbacks
+    suggestionQueueRef.current.setDisplayCallbacks({
+      onShow: (suggestion) => setCurrentSuggestion(suggestion),
+      onHide: () => setCurrentSuggestion(null)
     });
+    
+    // Initialize coaching engine settings
+    coachingEngineRef.current.setSuggestionsEnabled(suggestionsEnabled);
+  }, [suggestionsEnabled]);
 
-    return () => subscription.unsubscribe();
+  // Skip authentication for local development
+  useEffect(() => {
+    // Create a mock user for local development
+    const mockUser = {
+      id: 'local-user',
+      email: 'local@vocaledge.app',
+      user_metadata: { name: 'Local User' }
+    };
+    setUser(mockUser as any);
+    setActiveScreen('home');
   }, []);
 
   // Fetch data from Supabase when user is logged in
@@ -92,125 +107,46 @@ const App: React.FC = () => {
     }
   }, [user]);
 
+  // Mock data fetching for local development
   const fetchUserData = async () => {
     if (!user) return;
-    try {
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      
-      if (profileData) {
-        setProfile({
-          name: profileData.name || '',
-          bio: profileData.bio || '',
-          goal: profileData.goal || '',
-          preferredTone: profileData.preferred_tone || 'supportive',
-          joinedDate: profileData.created_at || new Date().toLocaleDateString()
-        });
-      }
+    
+    // Set mock profile data
+    setProfile({
+      name: 'Local User',
+      bio: 'Communication enthusiast',
+      goal: 'Improve public speaking skills',
+      preferredTone: 'supportive',
+      joinedDate: new Date().toLocaleDateString()
+    });
 
-      const { data: historyData } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (historyData) {
-        setHistory(historyData.map(s => ({
-          id: s.id,
-          date: new Date(s.created_at).toLocaleDateString(),
-          scenarioType: s.scenario_type,
-          confidenceScore: s.confidence_score,
-          effectivenessScore: s.effectiveness_score,
-          feedback: s.feedback,
-          duration: s.duration,
-          personaName: s.persona_name,
-          recordingTurns: s.recording_turns
-        })));
-      }
-    } catch (e) {
-      console.error("Error fetching user data", e);
-    }
+    // Set empty history for fresh start
+    setHistory([]);
   };
 
-  const checkGeminiKey = async () => {
-    try {
-      // @ts-ignore
-      const hasKey = await window.aistudio.hasSelectedApiKey();
-      if (hasKey) {
-        setActiveScreen('home');
-      } else {
-        setActiveScreen('auth');
-      }
-    } catch (e) {
-      setActiveScreen('auth');
-    }
-  };
 
-  const handleIdentity = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsAuthLoading(true);
-    setErrorMsg(null);
-    try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ 
-          email, 
-          password,
-          options: {
-            data: { name: email.split('@')[0] }
-          }
-        });
-        if (error) throw error;
-        setErrorMsg("Check your email for confirmation!");
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message);
-    } finally {
-      setIsAuthLoading(false);
-    }
-  };
-
-  const handleConnectKey = async () => {
-    try {
-      // @ts-ignore
-      await window.aistudio.openSelectKey();
-      await checkGeminiKey();
-    } catch (e) {
-      setErrorMsg("Failed to connect API Key.");
-    }
-  };
 
   const wipeHistory = async () => {
     if (!user) return;
     if (!confirm("Are you sure you want to wipe all session history? This cannot be undone.")) return;
     
-    const { error } = await supabase
-      .from('sessions')
-      .delete()
-      .eq('user_id', user.id);
-    
-    if (error) {
-      setErrorMsg("Failed to wipe history.");
-    } else {
-      setHistory([]);
-      setErrorMsg("History cleared.");
-      setTimeout(() => setErrorMsg(null), 2000);
-    }
+    // For local development, just clear the local history
+    setHistory([]);
+    setErrorMsg("History cleared.");
+    setTimeout(() => setErrorMsg(null), 2000);
   };
 
   const handleSignOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      setErrorMsg("Failed to sign out.");
-    } else {
-      setActiveScreen('landing');
-      setUser(null);
-    }
+    // Reset app to initial state
+    setHistory([]);
+    setProfile({
+      name: 'Local User',
+      bio: 'Communication enthusiast',
+      goal: 'Improve public speaking skills',
+      preferredTone: 'supportive',
+      joinedDate: new Date().toLocaleDateString()
+    });
+    setActiveScreen('home');
   };
 
   const handleStartSession = async () => {
@@ -225,6 +161,10 @@ const App: React.FC = () => {
       outcome: outcome || "Growth",
       focusSkills: selectedSkills.length > 0 ? selectedSkills : ['clarity']
     };
+
+    // Set up coaching engine for this session
+    coachingEngineRef.current.setScenarioContext(selectedScenario.type);
+    coachingEngineRef.current.resetSession();
 
     setActiveScreen('practice');
     setIsSessionActive(true);
@@ -247,6 +187,34 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePaceChange = (pace: PaceSpeed) => {
+    setCurrentPace(pace);
+    coachRef.current.setPace(pace);
+  };
+
+  const handleSuggestionsToggle = (enabled: boolean) => {
+    setSuggestionsEnabled(enabled);
+    coachingEngineRef.current.setSuggestionsEnabled(enabled);
+    if (!enabled) {
+      setCurrentSuggestion(null);
+    }
+  };
+
+  const handleSuggestionDismiss = () => {
+    suggestionQueueRef.current.dismissCurrent();
+  };
+
+  const handleSuggestionExpand = (suggestion: CoachingSuggestion) => {
+    // Mark suggestion as acted upon for analytics
+    coachingEngineRef.current.markSuggestionActedUpon(suggestion.id);
+  };
+
+  const handleCoachingAnalysis = (metrics: EnhancedRealtimeMetrics) => {
+    // Update live metrics for display
+    setLiveEnergy(metrics.energy);
+    setLivePace(metrics.pace);
+  };
+
   const handleEndSession = async () => {
     const duration = startTimeRef.current ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0;
     setIsSessionActive(false);
@@ -265,36 +233,20 @@ const App: React.FC = () => {
         setLastTroubleWords([]);
       }
 
-      const sessionData = {
-        user_id: user.id,
-        scenario_type: selectedScenario!.type,
-        confidence_score: res.confidenceScore,
-        effectiveness_score: res.effectivenessScore,
+      // Store session in local history (no database for local development)
+      const newSession = {
+        id: `local-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        scenarioType: selectedScenario!.type,
+        confidenceScore: res.confidenceScore,
+        effectivenessScore: res.effectivenessScore,
         feedback: res.feedback,
         duration: duration,
-        persona_name: selectedPersona!.name[lang],
-        recording_turns: recordedTurns
+        personaName: selectedPersona!.name[lang],
+        recordingTurns: recordedTurns
       };
 
-      const { data: savedSession } = await supabase
-        .from('sessions')
-        .insert([sessionData])
-        .select()
-        .single();
-
-      if (savedSession) {
-        setHistory(prev => [{
-          id: savedSession.id,
-          date: new Date().toLocaleDateString(),
-          scenarioType: sessionData.scenario_type,
-          confidenceScore: sessionData.confidence_score,
-          effectivenessScore: sessionData.effectiveness_score,
-          feedback: sessionData.feedback,
-          duration: sessionData.duration,
-          personaName: sessionData.persona_name,
-          recordingTurns: sessionData.recording_turns
-        }, ...prev]);
-      }
+      setHistory(prev => [newSession, ...prev]);
       
       setActiveScreen('results');
     } catch (e) {
@@ -308,23 +260,9 @@ const App: React.FC = () => {
 
   const saveProfile = async () => {
     if (!user) return;
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        name: profile.name,
-        bio: profile.bio,
-        goal: profile.goal,
-        preferred_tone: profile.preferredTone,
-        updated_at: new Date()
-      });
-    
-    if (error) {
-      setErrorMsg("Failed to sync profile.");
-    } else {
-      setErrorMsg("Profile synced!");
-      setTimeout(() => setErrorMsg(null), 2000);
-    }
+    // For local development, just show success message
+    setErrorMsg("Profile saved locally!");
+    setTimeout(() => setErrorMsg(null), 2000);
   };
 
   const t = (key: keyof typeof TRANSLATIONS) => TRANSLATIONS[key][lang];
@@ -357,89 +295,6 @@ const App: React.FC = () => {
     );
   }
 
-  if (activeScreen === 'landing') {
-    return (
-      <div className="flex flex-col h-full bg-slate-950 text-white relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-[80vw] h-[80vw] bg-blue-600/10 rounded-full -mr-[40vw] -mt-[40vw] blur-[100px]"></div>
-        <div className="absolute bottom-0 left-0 w-[60vw] h-[60vw] bg-indigo-600/10 rounded-full -ml-[30vw] -mb-[30vw] blur-[80px]"></div>
-        <div className="flex-1 flex flex-col px-8 py-16 z-10">
-          <div className="mb-12">
-            <h1 className="text-5xl font-black italic tracking-tighter mb-2">
-              <span className="text-blue-500">VOCAL</span>EDGE
-            </h1>
-            <p className="text-slate-400 font-bold uppercase tracking-[0.3em] text-[10px]">Elite AI Communication Training</p>
-          </div>
-          <div className="flex-1 space-y-12">
-            <div className="space-y-4">
-               <h2 className="text-4xl font-black leading-tight">Master Every <br/><span className="text-blue-400">Interaction.</span></h2>
-               <p className="text-slate-400 text-sm leading-relaxed max-w-[280px]">
-                 Practice high-stakes conversations with AI personas that challenge your logic, tone, and confidence in real-time.
-               </p>
-            </div>
-            <div className="grid grid-cols-1 gap-4">
-               <div className="flex items-start gap-4 p-4 rounded-3xl bg-slate-900/50 border border-white/5 backdrop-blur-sm">
-                  <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-500"><i className="fas fa-microphone-lines"></i></div>
-                  <div>
-                    <h4 className="font-bold text-sm">Real-time Feedback</h4>
-                    <p className="text-[11px] text-slate-500">Live energy and pace analysis.</p>
-                  </div>
-               </div>
-            </div>
-          </div>
-          <div className="space-y-4 pt-12">
-            <button 
-              onClick={() => user ? checkGeminiKey() : setActiveScreen('identity')}
-              className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-[2.5rem] text-lg shadow-2xl transition-all active:scale-95 flex items-center justify-center gap-3"
-            >
-              BEGIN TRAINING <i className="fas fa-arrow-right text-sm"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeScreen === 'identity') {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-slate-950 text-white p-8 animate-fadeIn relative">
-        <button onClick={() => setActiveScreen('landing')} className="absolute top-12 left-8 text-slate-500 hover:text-white transition-colors">
-          <i className="fas fa-arrow-left"></i>
-        </button>
-        <div className="text-center space-y-4 mb-12">
-           <h1 className="text-4xl font-black italic tracking-tighter"><span className="text-blue-500">VOCAL</span>EDGE</h1>
-          <p className="text-slate-400 font-medium max-w-xs mx-auto text-sm">
-            {isSignUp ? 'Create your coach profile to start training.' : 'Resume your communication training.'}
-          </p>
-        </div>
-        <form onSubmit={handleIdentity} className="w-full max-w-sm space-y-4">
-          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-4 text-white outline-none focus:border-blue-500" placeholder="Email Address" />
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-4 text-white outline-none focus:border-blue-500" placeholder="Password" />
-          <button type="submit" disabled={isAuthLoading} className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-[2rem] text-lg shadow-xl active:scale-95 transition-all">
-            {isAuthLoading ? <i className="fas fa-spinner fa-spin"></i> : (isSignUp ? 'CREATE ACCOUNT' : 'SECURE SIGN IN')}
-          </button>
-        </form>
-        <button onClick={() => setIsSignUp(!isSignUp)} className="mt-8 text-xs font-bold text-slate-500 hover:text-white uppercase tracking-widest">
-          {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-        </button>
-        {errorMsg && <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-xs text-center">{errorMsg}</div>}
-      </div>
-    );
-  }
-
-  if (activeScreen === 'auth') {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-slate-950 text-white p-8 space-y-12">
-        <div className="text-center space-y-4">
-          <div className="w-24 h-24 rounded-[2rem] bg-blue-600 mx-auto flex items-center justify-center text-4xl shadow-2xl animate-pulse"><i className="fas fa-key"></i></div>
-          <h2 className="text-2xl font-black">INITIALIZE CORE</h2>
-          <p className="text-slate-400 font-medium max-w-xs mx-auto text-sm">Connect a Google Cloud Project to power the real-time AI engine.</p>
-        </div>
-        <button onClick={handleConnectKey} className="w-full max-w-sm py-5 bg-white text-slate-950 font-black rounded-[2rem] text-lg shadow-xl active:scale-95 transition-all">CONNECT API KEY</button>
-        <button onClick={handleSignOut} className="text-slate-500 text-xs font-bold uppercase tracking-widest">Sign Out</button>
-      </div>
-    );
-  }
-
   return (
     <div className={`flex flex-col h-full bg-slate-950 text-slate-100 ${isRTL ? 'font-arabic' : 'font-english'}`}>
       {errorMsg && (
@@ -455,9 +310,6 @@ const App: React.FC = () => {
         </h1>
         <div className="flex items-center gap-3">
           <LanguageSwitcher current={lang} onChange={setLang} />
-          <button onClick={handleSignOut} className="text-slate-500 text-xs hover:text-white transition-colors">
-            <i className="fas fa-power-off"></i>
-          </button>
         </div>
       </header>
 
@@ -503,15 +355,8 @@ const App: React.FC = () => {
                   <option value="brutal">Brutal Honesty</option>
                 </select>
               </div>
-              <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95">SYNC TO CLOUD</button>
+              <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95">SAVE LOCALLY</button>
               <div className="pt-6 space-y-4">
-                <button onClick={handleConnectKey} className="w-full p-5 rounded-2xl bg-slate-900/80 border border-white/5 flex items-center justify-between group active:bg-slate-800">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center text-blue-500"><i className="fas fa-key"></i></div>
-                    <span className="font-bold text-sm text-slate-200">{t('settingsResetKey')}</span>
-                  </div>
-                  <i className="fas fa-chevron-right text-slate-600"></i>
-                </button>
                 <button onClick={wipeHistory} className="w-full p-5 rounded-2xl bg-red-900/10 border border-red-500/10 flex items-center justify-between group active:bg-red-900/20">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-500"><i className="fas fa-fire"></i></div>
@@ -520,8 +365,8 @@ const App: React.FC = () => {
                   <i className="fas fa-chevron-right text-red-900/50"></i>
                 </button>
                 <button onClick={handleSignOut} className="w-full p-5 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center gap-3 active:bg-slate-800 transition-all">
-                  <i className="fas fa-sign-out-alt text-slate-500"></i>
-                  <span className="font-bold text-slate-400 uppercase tracking-widest text-xs">Sign Out</span>
+                  <i className="fas fa-home text-slate-500"></i>
+                  <span className="font-bold text-slate-400 uppercase tracking-widest text-xs">Reset App</span>
                 </button>
               </div>
             </div>
@@ -550,16 +395,39 @@ const App: React.FC = () => {
         )}
 
         {activeScreen === 'practice' && (
-          <div className="h-full flex flex-col items-center justify-center space-y-12 animate-fadeIn py-10">
+          <div className="h-full flex flex-col items-center justify-center space-y-8 animate-fadeIn py-10">
+            {/* Pace Control and Coaching Toggle */}
+            <div className="w-full flex justify-between items-center px-4">
+              <PaceController 
+                currentPace={currentPace}
+                onPaceChange={handlePaceChange}
+                disabled={!isSessionActive}
+                lang={lang}
+              />
+              <SuggestionToggle
+                enabled={suggestionsEnabled}
+                onToggle={handleSuggestionsToggle}
+                disabled={!isSessionActive}
+                lang={lang}
+              />
+            </div>
+
             <div className="text-center space-y-4">
               <div className="w-40 h-40 rounded-[3rem] bg-slate-900 border-2 border-blue-500 flex items-center justify-center text-5xl text-blue-500"><i className={`fas ${selectedPersona?.icon}`}></i></div>
               <h3 className="text-2xl font-black">{selectedPersona?.name[lang]}</h3>
             </div>
+            
             <div className="w-full min-h-[160px] bg-slate-900/50 rounded-[2.5rem] border border-slate-800/50 p-6 flex flex-col justify-center relative">
                <VoiceVisualizer color="bg-blue-500" />
                <p className="mt-4 text-center text-sm italic text-slate-400 animate-pulse">{lastTranscription || "Listening..."}</p>
-               <LiveMetrics energy={liveEnergy} pace={livePace} lang={lang} />
+               <LiveMetrics 
+                 energy={liveEnergy} 
+                 pace={livePace} 
+                 lang={lang} 
+                 onCoachingAnalysis={handleCoachingAnalysis}
+               />
             </div>
+            
             <button onClick={handleEndSession} className="w-full max-w-xs py-5 rounded-[2rem] font-black bg-red-600 shadow-xl transition-all active:scale-95">FINISH</button>
           </div>
         )}
@@ -612,6 +480,14 @@ const App: React.FC = () => {
           ))}
         </nav>
       )}
+
+      {/* Coaching Suggestion Display */}
+      <SuggestionDisplay 
+        suggestion={currentSuggestion}
+        onDismiss={handleSuggestionDismiss}
+        onExpand={handleSuggestionExpand}
+        lang={lang}
+      />
 
       {showWorkshop && (
         <PronunciationWorkshop 

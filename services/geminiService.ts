@@ -1,7 +1,7 @@
-
-import { GoogleGenAI, Modality, Type, LiveServerMessage } from '@google/genai';
+import { GoogleGenAI, Modality, Type } from '@google/genai';
 import { createBlob, decode, decodeAudioData, pcmToWav } from './audioUtils';
-import { Language, SessionConfig, RecordingTurn } from '../types';
+import { Language, SessionConfig, RecordingTurn, PaceSpeed } from '../types';
+import { PaceService } from './paceService';
 
 export const getSystemInstruction = (config: SessionConfig, lang: Language) => {
   const { persona, topic, outcome, focusSkills } = config;
@@ -92,10 +92,19 @@ export class CommunicationCoach {
   private peaks = 0;
   private lastPeakTime = 0;
 
-  constructor() {}
+  // Pace control properties
+  private paceService: PaceService;
+
+  constructor() {
+    this.paceService = PaceService.getInstance();
+  }
 
   private getAIInstance() {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('VITE_GEMINI_API_KEY environment variable is not set');
+    }
+    return new GoogleGenAI({ apiKey });
   }
 
   async generateSuggestedTopics(lang: Language): Promise<string[]> {
@@ -107,7 +116,7 @@ export class CommunicationCoach {
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -139,6 +148,11 @@ export class CommunicationCoach {
     const ai = this.getAIInstance();
     
     try {
+      // Check for microphone permissions first
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Microphone access is not supported in this browser');
+      }
+
       this.audioContextIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       this.audioContextOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
@@ -157,7 +171,7 @@ export class CommunicationCoach {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -188,7 +202,7 @@ export class CommunicationCoach {
 
               const pcmBlob = createBlob(inputData);
               sessionPromise.then((session: any) => {
-                session.sendRealtimeInput({ media: pcmBlob });
+                session.sendRealtimeInput({ audio: pcmBlob });
               }).catch(err => {
                 console.warn("Input stream interrupted:", err);
               });
@@ -196,7 +210,7 @@ export class CommunicationCoach {
             source.connect(scriptProcessor);
             scriptProcessor.connect(this.audioContextIn!.destination);
           },
-          onmessage: async (message: LiveServerMessage) => {
+          onmessage: async (message: any) => {
             if (message.serverContent?.modelTurn?.parts[0]?.inlineData?.data) {
               const base64Audio = message.serverContent.modelTurn.parts[0].inlineData.data;
               const audioData = decode(base64Audio);
@@ -210,10 +224,15 @@ export class CommunicationCoach {
               const audioBuffer = await decodeAudioData(audioData, this.audioContextOut!, 24000, 1);
               const source = this.audioContextOut!.createBufferSource();
               source.buffer = audioBuffer;
+              
+              // Apply pace adjustment
+              const paceMultiplier = this.paceService.getPaceMultiplier();
+              source.playbackRate.value = paceMultiplier;
+              
               source.connect(this.audioContextOut!.destination);
               source.addEventListener('ended', () => this.sources.delete(source));
               source.start(this.nextStartTime);
-              this.nextStartTime += audioBuffer.duration;
+              this.nextStartTime += audioBuffer.duration / paceMultiplier; // Adjust timing for pace
               this.sources.add(source);
             }
 
@@ -296,11 +315,37 @@ export class CommunicationCoach {
     this.peaks = 0;
   }
 
+  // Pace control methods
+  setPace(pace: PaceSpeed): void {
+    try {
+      this.paceService.setPace(pace);
+      console.log(`Pace changed to: ${pace}`);
+    } catch (error) {
+      console.warn('Failed to set pace:', error);
+      // Graceful degradation: continue without pace change
+    }
+  }
+
+  getCurrentPace(): PaceSpeed {
+    return this.paceService.getCurrentPace();
+  }
+
+  getPaceMultiplier(): number {
+    return this.paceService.getPaceMultiplier();
+  }
+
   stopSession() {
     if (this.session) {
       try { this.session.close(); } catch(e) {}
       this.session = null;
     }
+    
+    // Stop all audio sources
+    this.sources.forEach(source => {
+      try { source.stop(); } catch(e) {}
+    });
+    this.sources.clear();
+    
     if (this.audioContextIn) {
       try { this.audioContextIn.close(); } catch(e) {}
       this.audioContextIn = null;
@@ -310,6 +355,7 @@ export class CommunicationCoach {
       this.audioContextOut = null;
     }
     
+    // Save any remaining audio data
     if (this.currentUserText || this.currentUserPCM.length > 0) {
        const userWav = pcmToWav(new Int16Array(this.currentUserPCM), 16000);
        this.turns.push({ id: `u-final-${Date.now()}`, role: 'user', text: this.currentUserText, audioUrl: URL.createObjectURL(userWav) });
@@ -321,6 +367,8 @@ export class CommunicationCoach {
 
     const history = this.transcriptionHistory.join('\n');
     const recordedTurns = [...this.turns];
+    
+    // Clean up state
     this.transcriptionHistory = [];
     this.turns = [];
     this.currentUserPCM = [];
@@ -328,6 +376,7 @@ export class CommunicationCoach {
     this.currentUserText = '';
     this.currentAiText = '';
     this.peaks = 0;
+    this.nextStartTime = 0;
     
     return { history, recordedTurns };
   }
@@ -355,7 +404,7 @@ export class CommunicationCoach {
     ${history}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-1.5-flash',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -395,7 +444,7 @@ export class CommunicationCoach {
     };
     
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
+      model: "gemini-1.5-flash",
       contents: [{ parts: [{ text: `Say this clearly: ${text}` }] }],
       config: {
         responseModalities: [Modality.AUDIO],
@@ -418,7 +467,7 @@ export class CommunicationCoach {
     Return JSON: { score: number, feedback: string, needsCorrection: boolean }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-1.5-flash',
       // Fix: contents must be of type Content (object with parts) or Content[]
       contents: {
         parts: [

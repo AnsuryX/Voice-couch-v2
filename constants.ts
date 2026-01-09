@@ -1,4 +1,4 @@
-import { Language, ScenarioType, Scenario, Persona } from './types';
+import { Language, ScenarioType, Scenario, Persona, PaceSpeed, SuggestionType } from './types';
 
 export const FOCUS_SKILLS = [
   { id: 'active_listening', label: { en: 'Active Listening', ar_msa: 'الاستماع النشط', ar_khaleeji: 'تسمع زين' } },
@@ -8,6 +8,57 @@ export const FOCUS_SKILLS = [
   { id: 'empathy', label: { en: 'Empathy', ar_msa: 'التعاطف', ar_khaleeji: 'التعاطف' } },
   { id: 'vulnerability', label: { en: 'Vulnerability', ar_msa: 'الصدق الشعوري', ar_khaleeji: 'الفضفضة' } }
 ];
+
+// Pace Control Constants
+export const PACE_MULTIPLIERS: Record<PaceSpeed, number> = {
+  slow: 0.8,
+  normal: 1.0,
+  fast: 1.2
+} as const;
+
+export const PACE_LABELS: Record<PaceSpeed, Record<Language, string>> = {
+  slow: { en: 'Slow', ar_msa: 'بطيء', ar_khaleeji: 'بطيء' },
+  normal: { en: 'Normal', ar_msa: 'عادي', ar_khaleeji: 'عادي' },
+  fast: { en: 'Fast', ar_msa: 'سريع', ar_khaleeji: 'سريع' }
+};
+
+// Coaching Constants
+export const COACHING_THRESHOLDS = {
+  LOW_ENERGY: 0.3,
+  HIGH_PACE: 8, // peaks per second
+  LONG_PAUSE: 3000, // milliseconds
+  SUGGESTION_COOLDOWN: 30000, // 30 seconds
+  AUTO_DISMISS_TIME: 4000, // 4 seconds
+  ANALYSIS_TIMEOUT: 500 // milliseconds
+} as const;
+
+export const SUGGESTION_MESSAGES: Record<SuggestionType, Record<Language, string>> = {
+  energy: {
+    en: 'Try speaking with more energy and enthusiasm',
+    ar_msa: 'حاول التحدث بطاقة وحماس أكبر',
+    ar_khaleeji: 'حاول تسولف بطاقة وحماس أكثر'
+  },
+  pace: {
+    en: 'Slow down your speech for better clarity',
+    ar_msa: 'أبطئ من سرعة كلامك للوضوح أكثر',
+    ar_khaleeji: 'خفف من سرعة كلامك عشان يكون أوضح'
+  },
+  pause: {
+    en: 'Take a moment to gather your thoughts',
+    ar_msa: 'خذ لحظة لتجميع أفكارك',
+    ar_khaleeji: 'خذ وقتك عشان تجمع أفكارك'
+  },
+  clarity: {
+    en: 'Focus on clear pronunciation',
+    ar_msa: 'ركز على النطق الواضح',
+    ar_khaleeji: 'ركز على النطق الواضح'
+  },
+  filler: {
+    en: 'Try pausing instead of using filler words',
+    ar_msa: 'حاول التوقف بدلاً من استخدام كلمات الحشو',
+    ar_khaleeji: 'حاول تسكت بدال ما تقول كلمات زيادة'
+  }
+};
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -172,5 +223,15 @@ export const TRANSLATIONS = {
   tutorialPractice: { en: 'Speak naturally. We analyze your tone, energy, and pace in real-time.', ar_msa: 'تحدث بشكل طبيعي. نقوم بتحليل نبرة صوتك وطاقتك في الوقت الفعلي.', ar_khaleeji: 'سولف عادي. بنحلل نبرة صوتك وطاقتك وسرعتك في نفس الوقت.' },
   tutorialResults: { en: 'Receive the unfiltered truth. Review your metrics and master the feedback.', ar_msa: 'احصل على الحقيقة غير المفلترة. راجع مقاييسك وأتقن الملاحظات.', ar_khaleeji: 'خذ الزبدة بدون مجاملات. راجع أرقامك وتعلم من الملاحظات.' },
   tutorialNext: { en: 'Next', ar_msa: 'التالي', ar_khaleeji: 'اللي بعده' },
-  tutorialFinish: { en: 'Ready to Engage', ar_msa: 'جاهز للاشتباك', ar_khaleeji: 'جاهز للسوالف' }
+  tutorialFinish: { en: 'Ready to Engage', ar_msa: 'جاهز للاشتباك', ar_khaleeji: 'جاهز للسوالف' },
+  // Pace Control Translations
+  paceControl: { en: 'Speech Pace', ar_msa: 'سرعة الكلام', ar_khaleeji: 'سرعة السوالف' },
+  paceSlowLabel: { en: 'Slow', ar_msa: 'بطيء', ar_khaleeji: 'بطيء' },
+  paceNormalLabel: { en: 'Normal', ar_msa: 'عادي', ar_khaleeji: 'عادي' },
+  paceFastLabel: { en: 'Fast', ar_msa: 'سريع', ar_khaleeji: 'سريع' },
+  // Coaching Translations
+  coachingSuggestions: { en: 'Coaching Tips', ar_msa: 'نصائح التدريب', ar_khaleeji: 'نصائح التدريب' },
+  expandTip: { en: 'Tap to expand', ar_msa: 'اضغط للتوسيع', ar_khaleeji: 'اضغط للتوسيع' },
+  disableSuggestions: { en: 'Disable Suggestions', ar_msa: 'إيقاف الاقتراحات', ar_khaleeji: 'أوقف الاقتراحات' },
+  enableSuggestions: { en: 'Enable Suggestions', ar_msa: 'تفعيل الاقتراحات', ar_khaleeji: 'فعل الاقتراحات' }
 };
