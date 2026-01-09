@@ -427,8 +427,8 @@ const App: React.FC = () => {
         {activeScreen === 'home' && (
           <div className="space-y-8 animate-fadeIn">
             <div>
-              <h2 className="text-2xl font-black text-white">{t('welcome')}{profile.name ? `, ${profile.name}` : ''}</h2>
-              <p className="text-slate-500 text-sm">Select a training scenario to begin.</p>
+              <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-white to-blue-500 animate-fadeIn">{t('welcome')}{profile.name ? `, ${profile.name}` : ''}</h2>
+              <p className="text-slate-500 text-sm mt-1 font-medium tracking-tight">Select a training scenario to begin your evolution.</p>
             </div>
             <div className="grid gap-4">
               {SCENARIOS.map(s => (
@@ -641,8 +641,8 @@ const App: React.FC = () => {
                         {turn.role === 'user' ? t('rolePilot') : t('roleCoach')}
                       </span>
                       <div className={`max-w-[85%] p-4 rounded-3xl text-sm font-medium leading-relaxed ${turn.role === 'user'
-                          ? 'bg-blue-600 text-white rounded-tr-none'
-                          : 'bg-slate-900 text-slate-300 rounded-tl-none border border-white/5'
+                        ? 'bg-blue-600 text-white rounded-tr-none'
+                        : 'bg-slate-900 text-slate-300 rounded-tl-none border border-white/5'
                         }`}>
                         {turn.text}
                       </div>
@@ -667,8 +667,11 @@ const App: React.FC = () => {
       {['home', 'stats', 'profile'].includes(activeScreen) && (
         <nav className="fixed bottom-0 left-0 right-0 bg-slate-950/80 backdrop-blur-2xl border-t border-slate-900 px-8 py-4 flex justify-between items-center z-50">
           {navItems.map(item => (
-            <button key={item.id} onClick={() => setActiveScreen(item.id as any)} className={`flex flex-col items-center gap-1 transition-all active:scale-90 ${activeScreen === item.id ? 'text-blue-500' : 'text-slate-600'}`}>
-              <i className={`fas ${item.icon} text-xl`}></i>
+            <button key={item.id} onClick={() => setActiveScreen(item.id as any)} className={`flex flex-col items-center gap-1 transition-all active:scale-90 relative ${activeScreen === item.id ? 'text-blue-500' : 'text-slate-600'}`}>
+              {activeScreen === item.id && (
+                <div className="absolute -top-1 w-1 h-1 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.8)] animate-pulse"></div>
+              )}
+              <i className={`fas ${item.icon} text-xl ${activeScreen === item.id ? 'drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]' : ''}`}></i>
               <span className="text-[9px] font-black uppercase tracking-widest">{item.label}</span>
             </button>
           ))}
