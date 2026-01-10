@@ -1,9 +1,9 @@
 import { GoogleGenAI, Modality, Type } from '@google/genai';
 import { createBlob, decode, decodeAudioData, pcmToWav } from './audioUtils';
-import { Language, SessionConfig, RecordingTurn, PaceSpeed } from '../types';
+import { Language, SessionConfig, RecordingTurn, PaceSpeed, UserProfile } from '../types';
 import { PaceService } from './paceService';
 
-export const getSystemInstruction = (config: SessionConfig, lang: Language) => {
+export const getSystemInstruction = (config: SessionConfig, lang: Language, userProfile?: UserProfile) => {
   const { persona, topic, outcome, focusSkills } = config;
   const personaDesc = persona.personality[lang];
   const personaRole = persona.role[lang];
@@ -14,6 +14,15 @@ export const getSystemInstruction = (config: SessionConfig, lang: Language) => {
     ar_msa: "تحدث باللغة العربية الفصحى الحديثة فقط.",
     ar_khaleeji: "تحدث بلهجة خليجية بيضاء (إماراتية/سعودية)."
   };
+
+  const userContext = userProfile ? `
+  USER CONTEXT:
+  - Name: ${userProfile.name || 'Anonymous User'}
+  - Goal: ${userProfile.goal || 'Not specified'}
+  - Bio: ${userProfile.bio || 'Not specified'}
+  - Preferred Coaching Tone: ${userProfile.preferredTone}
+  IMPORTANT: Address the user by their name if provided. Tailor your coaching to help them achieve their specific goal.
+  ` : '';
 
   let specificBehavior = "";
 
@@ -53,6 +62,8 @@ export const getSystemInstruction = (config: SessionConfig, lang: Language) => {
     - CELEBRATE VULNERABILITY: When the user shares something vulnerable or steps outside their pattern, explicitly celebrate it with warmth.
     - ${langInstructions[lang]}
     
+    ${userContext}
+
     Reward their progress in: ${focusSkills.join(', ')}.`;
   }
 
@@ -62,6 +73,8 @@ export const getSystemInstruction = (config: SessionConfig, lang: Language) => {
   Their goal is to "${outcome}".
   ${langInstructions[lang]}
   
+  ${userContext}
+
   CORE BEHAVIOR:
   1. BE RELEVANT AND TOUGH. If they are failing at their goal, call it out. 
   2. DYNAMIC INTERACTION: Do not just wait for the user to finish. Be proactive. 
@@ -82,7 +95,7 @@ export class CommunicationCoach {
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private transcriptionHistory: string[] = [];
-  
+
   private turns: RecordingTurn[] = [];
   private currentUserPCM: number[] = [];
   private currentAiPCM: number[] = [];
@@ -134,19 +147,20 @@ export class CommunicationCoach {
   }
 
   async startSession(
-    config: SessionConfig, 
-    lang: Language, 
+    config: SessionConfig,
+    lang: Language,
     callbacks: {
       onTranscriptionUpdate?: (text: string) => void;
       onInterrupted?: () => void;
       onClose?: () => void;
       onerror?: (e: any) => void;
-    }
+    },
+    userProfile?: UserProfile
   ) {
     this.stopSession();
-    
+
     const ai = this.getAIInstance();
-    
+
     try {
       // Check for microphone permissions first
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -155,21 +169,21 @@ export class CommunicationCoach {
 
       this.audioContextIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       this.audioContextOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      
+
       if (this.audioContextIn.state === 'suspended') await this.audioContextIn.resume();
       if (this.audioContextOut.state === 'suspended') await this.audioContextOut.resume();
 
       this.analyser = this.audioContextIn.createAnalyser();
       this.analyser.fftSize = 256;
-      
+
       this.turns = [];
       this.currentUserPCM = [];
       this.currentAiPCM = [];
       this.peaks = 0;
       this.nextStartTime = 0;
-      
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
+
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
@@ -177,7 +191,7 @@ export class CommunicationCoach {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: lang === 'en' ? 'Zephyr' : 'Kore' } },
           },
-          systemInstruction: getSystemInstruction(config, lang),
+          systemInstruction: getSystemInstruction(config, lang, userProfile),
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         },
@@ -185,15 +199,15 @@ export class CommunicationCoach {
           onopen: () => {
             const source = this.audioContextIn!.createMediaStreamSource(stream);
             source.connect(this.analyser!);
-            
+
             const scriptProcessor = this.audioContextIn!.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
-              
+
               for (let i = 0; i < inputData.length; i++) {
                 const val = inputData[i] * 32768;
                 this.currentUserPCM.push(val);
-                
+
                 if (Math.abs(inputData[i]) > 0.15 && Date.now() - this.lastPeakTime > 150) {
                   this.peaks++;
                   this.lastPeakTime = Date.now();
@@ -215,7 +229,7 @@ export class CommunicationCoach {
               const base64Audio = message.serverContent.modelTurn.parts[0].inlineData.data;
               const audioData = decode(base64Audio);
               const int16Data = new Int16Array(audioData.buffer);
-              
+
               for (let i = 0; i < int16Data.length; i++) {
                 this.currentAiPCM.push(int16Data[i]);
               }
@@ -224,11 +238,11 @@ export class CommunicationCoach {
               const audioBuffer = await decodeAudioData(audioData, this.audioContextOut!, 24000, 1);
               const source = this.audioContextOut!.createBufferSource();
               source.buffer = audioBuffer;
-              
+
               // Apply pace adjustment
               const paceMultiplier = this.paceService.getPaceMultiplier();
               source.playbackRate.value = paceMultiplier;
-              
+
               source.connect(this.audioContextOut!.destination);
               source.addEventListener('ended', () => this.sources.delete(source));
               source.start(this.nextStartTime);
@@ -238,7 +252,7 @@ export class CommunicationCoach {
 
             if (message.serverContent?.interrupted) {
               this.sources.forEach(s => {
-                try { s.stop(); } catch(e) {}
+                try { s.stop(); } catch (e) { }
               });
               this.sources.clear();
               this.nextStartTime = 0;
@@ -336,38 +350,38 @@ export class CommunicationCoach {
 
   stopSession() {
     if (this.session) {
-      try { this.session.close(); } catch(e) {}
+      try { this.session.close(); } catch (e) { }
       this.session = null;
     }
-    
+
     // Stop all audio sources
     this.sources.forEach(source => {
-      try { source.stop(); } catch(e) {}
+      try { source.stop(); } catch (e) { }
     });
     this.sources.clear();
-    
+
     if (this.audioContextIn) {
-      try { this.audioContextIn.close(); } catch(e) {}
+      try { this.audioContextIn.close(); } catch (e) { }
       this.audioContextIn = null;
     }
     if (this.audioContextOut) {
-      try { this.audioContextOut.close(); } catch(e) {}
+      try { this.audioContextOut.close(); } catch (e) { }
       this.audioContextOut = null;
     }
-    
+
     // Save any remaining audio data
     if (this.currentUserText || this.currentUserPCM.length > 0) {
-       const userWav = pcmToWav(new Int16Array(this.currentUserPCM), 16000);
-       this.turns.push({ id: `u-final-${Date.now()}`, role: 'user', text: this.currentUserText, audioUrl: URL.createObjectURL(userWav) });
+      const userWav = pcmToWav(new Int16Array(this.currentUserPCM), 16000);
+      this.turns.push({ id: `u-final-${Date.now()}`, role: 'user', text: this.currentUserText, audioUrl: URL.createObjectURL(userWav) });
     }
     if (this.currentAiText || this.currentAiPCM.length > 0) {
-       const aiWav = pcmToWav(new Int16Array(this.currentAiPCM), 24000);
-       this.turns.push({ id: `m-final-${Date.now()}`, role: 'model', text: this.currentAiText, audioUrl: URL.createObjectURL(aiWav) });
+      const aiWav = pcmToWav(new Int16Array(this.currentAiPCM), 24000);
+      this.turns.push({ id: `m-final-${Date.now()}`, role: 'model', text: this.currentAiText, audioUrl: URL.createObjectURL(aiWav) });
     }
 
     const history = this.transcriptionHistory.join('\n');
     const recordedTurns = [...this.turns];
-    
+
     // Clean up state
     this.transcriptionHistory = [];
     this.turns = [];
@@ -377,15 +391,15 @@ export class CommunicationCoach {
     this.currentAiText = '';
     this.peaks = 0;
     this.nextStartTime = 0;
-    
+
     return { history, recordedTurns };
   }
 
   async getDetailedAnalysis(history: string, config: SessionConfig, lang: Language) {
     const ai = this.getAIInstance();
     const isWarm = config.persona.isWarm;
-    const toneInstruction = isWarm 
-      ? "Provide a supportive, encouraging analysis highlighting their effort to open up and be expressive." 
+    const toneInstruction = isWarm
+      ? "Provide a supportive, encouraging analysis highlighting their effort to open up and be expressive."
       : "Provide a brutal, unfiltered analysis pointing out failures and weaknesses.";
 
     const prompt = `Analyze this conversation where the user interacted with "${config.persona.name[lang]}". ${toneInstruction}
@@ -416,9 +430,9 @@ export class CommunicationCoach {
             feedback: { type: Type.STRING },
             skillScores: { type: Type.OBJECT, additionalProperties: { type: Type.NUMBER } },
             keyFailures: { type: Type.ARRAY, items: { type: Type.STRING } },
-            troubleWords: { 
-              type: Type.ARRAY, 
-              items: { 
+            troubleWords: {
+              type: Type.ARRAY,
+              items: {
                 type: Type.OBJECT,
                 properties: {
                   word: { type: Type.STRING },
@@ -442,7 +456,7 @@ export class CommunicationCoach {
       ar_msa: 'Puck',
       ar_khaleeji: 'Zephyr'
     };
-    
+
     const response = await ai.models.generateContent({
       model: "gemini-1.5-flash",
       contents: [{ parts: [{ text: `Say this clearly: ${text}` }] }],
@@ -455,7 +469,7 @@ export class CommunicationCoach {
         },
       },
     });
-    
+
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("Failed to generate speech");
     return base64Audio;
@@ -475,7 +489,7 @@ export class CommunicationCoach {
           { inlineData: { mimeType: 'audio/pcm;rate=16000', data: attemptAudioBase64 } }
         ]
       },
-      config: { 
+      config: {
         responseMimeType: 'application/json',
         // Fix: Added responseSchema for structured and reliable JSON output
         responseSchema: {

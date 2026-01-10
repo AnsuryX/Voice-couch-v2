@@ -21,8 +21,12 @@ const App: React.FC = () => {
   const [selectedScenario, setSelectedScenario] = useState<Scenario | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // User State (simplified for local development)
+  // User State
   const [user, setUser] = useState<any>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   // Customization State
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null);
@@ -98,7 +102,7 @@ const App: React.FC = () => {
       if (session?.user) {
         fetchUserData(session.user.id);
       } else {
-        setActiveScreen('loading');
+        setActiveScreen('home');
       }
     });
 
@@ -168,6 +172,49 @@ const App: React.FC = () => {
     }
   };
 
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setErrorMsg(null);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } catch (err: any) {
+      setErrorMsg(err.message || "Sign in failed.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleEmailSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setErrorMsg(null);
+    try {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+      setErrorMsg("Check your email for the confirmation link!");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Sign up failed.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+    } catch (err: any) {
+      setErrorMsg(err.message || "Google sign in failed.");
+    }
+  };
+
 
 
   const wipeHistory = async () => {
@@ -201,7 +248,7 @@ const App: React.FC = () => {
       joinedDate: ''
     });
     setUser(null);
-    setActiveScreen('loading');
+    setActiveScreen('home');
   };
 
   const handleStartSession = async () => {
@@ -234,7 +281,7 @@ const App: React.FC = () => {
           setIsSessionActive(false);
           setActiveScreen('customize');
         }
-      });
+      }, profile);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to initialize session.");
       setActiveScreen('customize');
@@ -382,21 +429,68 @@ const App: React.FC = () => {
           <i className="fas fa-bullseye text-2xl"></i>
         </div>
         {!user && (
-          <div className="flex flex-col items-center gap-6 animate-slideUp">
-            <div className="text-center">
+          <div className="flex flex-col items-center gap-6 animate-slideUp w-full max-w-sm px-6">
+            <div className="text-center mb-4">
               <h2 className="text-2xl font-black tracking-tighter uppercase italic">VocalEdge</h2>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.3em]">Master Your Voice</p>
             </div>
 
+            <form onSubmit={authMode === 'login' ? handleEmailSignIn : handleEmailSignUp} className="w-full space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest px-2">Email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  required
+                  className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 text-sm"
+                  placeholder="name@example.com"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest px-2">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                  className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 text-sm"
+                  placeholder="••••••••"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50"
+              >
+                {authLoading ? 'PROCESSING...' : (authMode === 'login' ? 'SIGN IN' : 'CREATE ACCOUNT')}
+              </button>
+            </form>
+
+            <div className="flex flex-col items-center gap-4 w-full">
+              <div className="flex items-center gap-4 w-full">
+                <div className="h-px bg-slate-800 flex-1"></div>
+                <span className="text-[10px] text-slate-600 font-bold">OR</span>
+                <div className="h-px bg-slate-800 flex-1"></div>
+              </div>
+
+              <button
+                onClick={handleGoogleSignIn}
+                className="w-full py-4 bg-slate-100 hover:bg-white text-slate-950 font-black rounded-2xl shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 border border-slate-200"
+              >
+                <i className="fab fa-google text-blue-600 text-lg"></i>
+                <span className="tracking-tight">CONTINUE WITH GOOGLE</span>
+              </button>
+            </div>
+
             <button
-              onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-              className="group relative px-8 py-4 bg-white text-slate-950 font-black rounded-2xl shadow-2xl active:scale-95 transition-all flex items-center gap-3 overflow-hidden"
+              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+              className="text-[10px] text-blue-500 font-black uppercase tracking-widest hover:underline"
             >
-              <div className="absolute inset-0 bg-blue-500/10 translate-y-full group-hover:translate-y-0 transition-transform"></div>
-              <i className="fab fa-google text-blue-600"></i>
-              <span className="relative">SIGN IN WITH GOOGLE</span>
+              {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
             </button>
-            <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center max-w-[220px] leading-relaxed opacity-50">
+
+            <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center max-w-[220px] leading-relaxed opacity-50 mt-4">
               Your voice metrics are private and protected by Supabase
             </p>
           </div>
@@ -449,37 +543,96 @@ const App: React.FC = () => {
         {activeScreen === 'profile' && (
           <div className="space-y-8 animate-fadeIn">
             <h2 className="text-3xl font-black">{t('profile')}</h2>
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userName')}</label>
-                <input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500" />
+            {user ? (
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userName')}</label>
+                  <input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userGoal')}</label>
+                  <textarea value={profile.goal} onChange={e => setProfile({ ...profile, goal: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 h-24" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('toneVibe')}</label>
+                  <select value={profile.preferredTone} onChange={e => setProfile({ ...profile, preferredTone: e.target.value as any })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500">
+                    <option value="supportive">Supportive Coach</option>
+                    <option value="brutal">Brutal Honesty</option>
+                  </select>
+                </div>
+                <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95 hover:bg-blue-500 hover:shadow-blue-500/20">{t('saveProfile')}</button>
+                <div className="pt-6 space-y-4">
+                  <button onClick={wipeHistory} className="w-full p-5 rounded-2xl bg-red-900/10 border border-red-500/10 flex items-center justify-between group active:bg-red-900/20">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-500"><i className="fas fa-fire"></i></div>
+                      <span className="font-bold text-sm text-red-400">{t('settingsClearData')}</span>
+                    </div>
+                    <i className="fas fa-chevron-right text-red-900/50"></i>
+                  </button>
+                  <button onClick={handleSignOut} className="w-full p-5 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center gap-3 active:bg-slate-800 transition-all">
+                    <i className="fas fa-sign-out-alt text-slate-500"></i>
+                    <span className="font-bold text-slate-400 uppercase tracking-widest text-xs">Sign Out</span>
+                  </button>
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('userGoal')}</label>
-                <textarea value={profile.goal} onChange={e => setProfile({ ...profile, goal: e.target.value })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 h-24" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{t('toneVibe')}</label>
-                <select value={profile.preferredTone} onChange={e => setProfile({ ...profile, preferredTone: e.target.value as any })} className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500">
-                  <option value="supportive">Supportive Coach</option>
-                  <option value="brutal">Brutal Honesty</option>
-                </select>
-              </div>
-              <button onClick={saveProfile} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg transition-all active:scale-95 hover:bg-blue-500 hover:shadow-blue-500/20">{t('saveProfile')}</button>
-              <div className="pt-6 space-y-4">
-                <button onClick={wipeHistory} className="w-full p-5 rounded-2xl bg-red-900/10 border border-red-500/10 flex items-center justify-between group active:bg-red-900/20">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-500"><i className="fas fa-fire"></i></div>
-                    <span className="font-bold text-sm text-red-400">{t('settingsClearData')}</span>
+            ) : (
+              <div className="flex flex-col items-center gap-6 w-full max-w-sm mx-auto">
+                <form onSubmit={authMode === 'login' ? handleEmailSignIn : handleEmailSignUp} className="w-full space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest px-2">Email</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      required
+                      className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 text-sm"
+                      placeholder="name@example.com"
+                    />
                   </div>
-                  <i className="fas fa-chevron-right text-red-900/50"></i>
-                </button>
-                <button onClick={handleSignOut} className="w-full p-5 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center gap-3 active:bg-slate-800 transition-all">
-                  <i className="fas fa-home text-slate-500"></i>
-                  <span className="font-bold text-slate-400 uppercase tracking-widest text-xs">Reset App</span>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest px-2">Password</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      required
+                      className="w-full bg-slate-900/50 border border-slate-800 rounded-2xl p-4 outline-none focus:border-blue-500 text-sm"
+                      placeholder="••••••••"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50"
+                  >
+                    {authLoading ? 'PROCESSING...' : (authMode === 'login' ? 'SIGN IN' : 'CREATE ACCOUNT')}
+                  </button>
+                </form>
+
+                <div className="flex flex-col items-center gap-4 w-full">
+                  <div className="flex items-center gap-4 w-full">
+                    <div className="h-px bg-slate-800 flex-1"></div>
+                    <span className="text-[10px] text-slate-600 font-bold">OR</span>
+                    <div className="h-px bg-slate-800 flex-1"></div>
+                  </div>
+
+                  <button
+                    onClick={handleGoogleSignIn}
+                    className="w-full py-4 bg-slate-100 hover:bg-white text-slate-950 font-black rounded-2xl shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3 border border-slate-200"
+                  >
+                    <i className="fab fa-google text-blue-600 text-lg"></i>
+                    <span className="tracking-tight">CONTINUE WITH GOOGLE</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+                  className="text-[10px] text-blue-500 font-black uppercase tracking-widest hover:underline"
+                >
+                  {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
                 </button>
               </div>
-            </div>
+            )}
           </div>
         )}
 
