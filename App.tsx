@@ -177,7 +177,10 @@ const App: React.FC = () => {
     setAuthLoading(true);
     setErrorMsg(null);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
       if (error) throw error;
     } catch (err: any) {
       setErrorMsg(err.message || "Sign in failed.");
@@ -191,7 +194,13 @@ const App: React.FC = () => {
     setAuthLoading(true);
     setErrorMsg(null);
     try {
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: window.location.origin
+        }
+      });
       if (error) throw error;
       setErrorMsg("Check your email for the confirmation link!");
     } catch (err: any) {
