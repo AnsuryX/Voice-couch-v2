@@ -446,7 +446,7 @@ export class CommunicationCoach {
       }
     });
 
-    return JSON.parse(response.text);
+    return JSON.parse(response.text.replace(/```json\n?|```/g, '').trim());
   }
 
   async generateSpeech(text: string, lang: Language): Promise<string> {
@@ -503,6 +503,6 @@ export class CommunicationCoach {
       }
     });
 
-    return JSON.parse(response.text);
+    return JSON.parse(response.text.replace(/```json\n?|```/g, '').trim());
   }
 }

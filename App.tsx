@@ -166,7 +166,9 @@ const App: React.FC = () => {
         setHistory(formattedHistory);
       }
 
-      setActiveScreen('home');
+      if (activeScreen === 'loading') {
+        setActiveScreen('home');
+      }
     } catch (err) {
       console.error('Unexpected error in fetchUserData:', err);
     }
@@ -381,7 +383,8 @@ const App: React.FC = () => {
 
       setActiveScreen('results');
     } catch (e) {
-      setErrorMsg("Analysis failed.");
+      console.error("Session analysis failed:", e);
+      setErrorMsg("Analysis failed. Please check your connection and try again.");
       setActiveScreen('home');
     } finally {
       setIsAnalyzing(false);
@@ -726,34 +729,54 @@ const App: React.FC = () => {
         {activeScreen === 'stats' && (
           <div className="space-y-8 animate-fadeIn">
             <h2 className="text-3xl font-black">{t('stats')}</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black">{history.length}</h4><p className="text-[10px] text-slate-500 uppercase">Sessions</p></div>
-              <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black text-blue-500">{history.length > 0 ? Math.round(history.reduce((a, c) => a + c.confidenceScore, 0) / history.length) : 0}%</h4><p className="text-[10px] text-slate-500 uppercase tracking-widest">Avg Conf</p></div>
-            </div>
-            <div className="space-y-4">
-              {history.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => setSelectedSessionHistory(item)}
-                  className="w-full text-left p-4 bg-slate-900/40 border border-slate-900 rounded-2xl flex items-center justify-between group active:scale-[0.98] transition-all hover:bg-slate-900/60"
-                >
-                  <div>
-                    <p className="font-bold text-sm group-hover:text-blue-400 transition-colors">{item.personaName}</p>
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest">{item.date} • {Math.floor(item.duration / 60)}m {item.duration % 60}s</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <p className="text-blue-500 font-black">{item.confidenceScore}%</p>
-                    <i className="fas fa-chevron-right text-slate-800 text-xs group-hover:text-blue-500/50 transition-colors"></i>
-                  </div>
-                </button>
-              ))}
-              {history.length === 0 && (
-                <div className="text-center py-12 opacity-30">
-                  <i className="fas fa-history text-4xl mb-4"></i>
-                  <p className="text-xs uppercase tracking-[0.2em]">{t('noHistory')}</p>
+            {user ? (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black">{history.length}</h4><p className="text-[10px] text-slate-500 uppercase">Sessions</p></div>
+                  <div className="p-6 rounded-[2rem] bg-slate-900 border border-slate-800"><h4 className="text-3xl font-black text-blue-500">{history.length > 0 ? Math.round(history.reduce((a, c) => a + c.confidenceScore, 0) / history.length) : 0}%</h4><p className="text-[10px] text-slate-500 uppercase tracking-widest">Avg Conf</p></div>
                 </div>
-              )}
-            </div>
+                <div className="space-y-4">
+                  {history.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => setSelectedSessionHistory(item)}
+                      className="w-full text-left p-4 bg-slate-900/40 border border-slate-900 rounded-2xl flex items-center justify-between group active:scale-[0.98] transition-all hover:bg-slate-900/60"
+                    >
+                      <div>
+                        <p className="font-bold text-sm group-hover:text-blue-400 transition-colors">{item.personaName}</p>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest">{item.date} • {Math.floor(item.duration / 60)}m {item.duration % 60}s</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <p className="text-blue-500 font-black">{item.confidenceScore}%</p>
+                        <i className="fas fa-chevron-right text-slate-800 text-xs group-hover:text-blue-500/50 transition-colors"></i>
+                      </div>
+                    </button>
+                  ))}
+                  {history.length === 0 && (
+                    <div className="text-center py-12 opacity-30">
+                      <i className="fas fa-history text-4xl mb-4"></i>
+                      <p className="text-xs uppercase tracking-[0.2em]">{t('noHistory')}</p>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-6 w-full max-w-sm mx-auto py-12">
+                <div className="w-16 h-16 rounded-2xl bg-slate-900 flex items-center justify-center text-slate-600 mb-4">
+                  <i className="fas fa-lock text-2xl"></i>
+                </div>
+                <div className="text-center space-y-2">
+                  <h3 className="font-bold text-lg">Metrics are Private</h3>
+                  <p className="text-xs text-slate-500 px-8">Sign in to track your evolution and access your session history.</p>
+                </div>
+                <button
+                  onClick={() => setActiveScreen('profile')}
+                  className="px-8 py-3 bg-blue-600 text-white font-black rounded-xl text-xs uppercase tracking-widest active:scale-95 transition-all"
+                >
+                  Go to Login
+                </button>
+              </div>
+            )}
           </div>
         )}
       </main>
